@@ -1,0 +1,28 @@
+[project]
+name = "riffle-audio-analyser"
+version = "0.1.0"
+description = "Riffle Python audio analyser wrapping Spotify Basic Pitch"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "boto3>=1.34",
+    "fastapi>=0.115",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+basic-pitch = [
+    "basic-pitch",
+]
+test = [
+    "httpx>=0.27",
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires LocalStack or another S3-compatible endpoint",
+    "basic_pitch: requires the Basic Pitch runtime",
+]
