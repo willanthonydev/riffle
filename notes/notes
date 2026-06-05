@@ -1,0 +1,186 @@
+V1 Roadmap
+
+V1A: End-to-end non-rhythmic text tab
+Goal: prove the full product loop. A user records a short guitar phrase in the browser, previews it, uploads it, the
+backend stores it, processes it through Basic Pitch, infers simple string/fret positions, generates a text tab, and
+shows/downloads the result.
+
+001-audio-analyser-basic-pitch.md
+Python audio-analyser service. Wrap Spotify Basic Pitch, read prepared WAV audio from S3-compatible storage, and return
+normalised timestamped note events. This proves the riskiest technical assumption early: whether Basic Pitch gives
+useful note data for short guitar recordings.
+
+002-audio-analyser-openapi-contract.md
+Defines the work to create the OpenAPI contract for the audio-analyser service. The actual contract should live with the
+Python service and describe GET /health and POST /v1/analyse-audio so the Spring backend has a stable API to call.
+
+003-backend-recording-session-upload.md
+Spring backend endpoint for creating a RecordingSession and uploading original browser media. It validates metadata,
+assigns the local/dev ownerUserId, stores the original recording in S3/LocalStack, creates a MediaAsset, and returns
+the new session details. No processing happens yet.
+
+004-backend-recording-session-status.md
+Spring backend endpoint for reading the current RecordingSession status. Initially this just lets the frontend retrieve
+uploaded session metadata and media summary. Later this same endpoint can expose processing progress, failure state,
+and generated exports.
+
+005-frontend-recording-preview-upload.md
+First browser recording UI. The user can record a short clip, stop, preview it, discard/re-record, and upload it to the
+backend. This should support mobile and desktop browsers, with simple guidance like clean tone, avoid distortion, and
+keep recordings short.
+
+006-frontend-metronome-basic.md
+Adds optional metronome support to the recording UI. The user can enter BPM and enable/disable a click while recording.
+This does not mean rhythmic tab is implemented yet; BPM is captured as useful metadata and a recording aid.
+
+007-backend-processing-job-pipeline.md
+Introduces ProcessingJob records and the simple database-backed worker inside the Spring backend. Jobs are created
+sequentially and move through PENDING, PROCESSING, COMPLETED, or FAILED. This creates the pipeline structure without
+yet implementing FFmpeg, audio analysis, tab inference, or export generation.
+
+008-backend-media-preparation-ffmpeg.md
+Adds media preparation in the Spring backend worker. For audio/video recordings, FFmpeg extracts a prepared WAV audio
+asset from the original combined media. The prepared audio is stored in S3 and recorded as a derived MediaAsset.
+
+009-backend-audio-analyser-client.md
+Adds the Spring HTTP client for calling the Python audio-analyser service using its OpenAPI contract. This maps
+request/response models, handles timeouts and errors, and keeps the analyser integration behind a clean backend
+interface.
+
+010-backend-audio-analysis-job.md
+Wires the audio-analyser client into the ProcessingJob pipeline. The AUDIO_ANALYSIS job finds the prepared audio
+MediaAsset, calls the Python service, stores the returned analysis JSON in S3, creates an AnalysisResult record, and
+then creates the next job.
+
+011-tab-document-json-schema-v1.md
+Defines the first internal TabDocument JSON shape. This is Riffle’s neutral internal tab model before export. For V1A
+it should be six-string standard tuning, non-rhythmic, and contain tab notes with string, fret, source pitch, timing
+metadata, and confidence.
+
+012-tab-inference-v1.md
+Implements the first simple TabInferenceEngine. It reads the audio AnalysisResult, converts detected MIDI pitches into
+possible string/fret positions, chooses a basic playable position, and writes a TabDocument JSON artefact to S3. This
+is intentionally simple and not yet rhythm-aware or video-aware.
+
+013-text-tab-export-v1.md
+Generates a basic text tab from the TabDocument. The backend writes tab.txt to S3, creates a GeneratedExport record,
+and marks the session complete. This is the first user-visible tab output.
+
+014-frontend-processing-status.md
+Adds frontend polling and status display. After upload, the UI polls the backend status endpoint and shows simple
+states like uploaded, processing, completed, or failed. This gives the user feedback while the backend worker runs.
+
+015-frontend-text-tab-result.md
+Shows the generated text tab in the frontend and allows the user to download it. This completes the first end-to-end
+loop: record, upload, process, generate tab, display/download result.
+
+V1B: Make the first version usable and stable
+Goal: turn the basic end-to-end flow into something nicer to use locally and in a private test environment.
+
+016-local-dev-compose.md
+Defines the local development setup. This should cover Postgres, LocalStack, audio-analyser, backend, frontend, and any
+required environment variables. The goal is that the whole system can be started predictably without manually wiring
+everything each time.
+
+017-error-handling-and-user-messages.md
+Standardises backend/frontend error handling for the first end-to-end flow. This should define safe user-facing
+messages for upload failure, processing failure, missing session, failed audio analysis, and export failure. It should
+avoid leaking stack traces or internal storage details.
+
+018-private-aws-test-deployment.md
+Defines a private AWS deployment for controlled testing. This is not public production. It should cover S3, RDS/Aurora
+Postgres, ECS Fargate services, frontend hosting, basic logging, and temporary private access protection.
+
+019-observability-basic.md
+Adds basic logs and operational visibility. The goal is to trace one recording session through upload, media
+preparation, audio analysis, tab inference, and export. This should be lightweight: useful logs, correlation
+IDs/session IDs, and simple health checks.
+
+V1C: Rhythm and better musical output
+Goal: move beyond “notes on strings” into more useful notation.
+
+020-rhythmic-tab-output-mode.md
+Introduces RHYTHMIC_TAB as a real output mode. BPM becomes required, and the backend starts mapping note timings onto a
+beat grid. This should cover quantisation settings, beat/bar positions, note durations, and how to handle imperfect
+human timing.
+
+021-quantisation-v1.md
+Implements the first quantisation algorithm. It takes note start/duration times and BPM, then snaps them to a simple
+grid. This should start conservative and transparent, because bad quantisation can make a tab worse than no rhythm.
+
+022-musicxml-export.md
+Adds MusicXML export from the TabDocument. This is the first proper editable notation-style export format and is likely
+more useful than PDF for external tools. It should build on the internal TabDocument rather than redoing inference
+logic.
+
+023-pdf-export-basic.md
+Adds a readable PDF export. This is useful for teachers and sharing exercises, but it is less useful for editing than
+MusicXML. The PDF can initially be simple and generated from the existing tab/export model.
+
+V1D: Product readiness before public launch
+Goal: make Riffle safe enough to expose beyond private testing.
+
+024-authentication-and-ownership.md
+Adds real authentication and replaces the local/dev ownerUserId with the authenticated user identity. This must add
+ownership checks so users can only access their own sessions, media, tab documents, and exports.
+
+025-usage-limits.md
+Adds usage limits before billing. This should define limits such as maximum recording duration, number of saved
+sessions, processing limits, and storage limits. It protects cost and abuse before the app is public.
+
+026-billing-and-subscriptions.md
+Adds paid tiers, probably via Stripe. This should define what free users get, what paid users get, and how usage limits
+change by plan. It should come after the core product is proven.
+
+027-retention-and-delete-session.md
+Defines retention and deletion behaviour. Users should be able to delete sessions, and the system should know what
+happens to original media, prepared media, analysis JSON, tab documents, and generated exports. This matters because
+recordings may contain personal audio/video.
+
+028-production-hardening.md
+Covers rate limiting, upload size limits, monitoring, alerting, safer error handling, deployment checks, and basic
+security review. This is the final gate before a public release.
+
+V2: Video-assisted tab inference
+Goal: add the differentiator: use video to improve string/fret and technique inference.
+
+029-frontend-audio-video-capture-and-calibration.md
+Improves the recording UI for AUDIO_VIDEO mode. The user can align the guitar neck in frame, record combined
+audio/video, and provide simple calibration metadata. This is where the UI starts supporting the future video
+differentiator properly.
+
+030-video-analyser-openapi-contract.md
+Defines the OpenAPI contract for the future Python video-analyser service. It should return timestamped
+isual/performance hints, not tabs.
+
+031-video-analyser-v1.md
+Implements the first video-analyser service. It likely uses OpenCV and MediaPipe to detect hands/landmarks and returns
+rough timestamped hints. It does not generate tabs or choose final string/fret positions.
+
+032-video-analysis-job.md
+Adds VIDEO_ANALYSIS into the backend ProcessingJob pipeline. The backend calls the video-analyser, stores Video
+AnalysisResult JSON in S3, and makes it available to tab inference.
+
+033-video-aware-tab-inference.md
+Updates TabInferenceEngine so it can combine audio note events with video hints. The goal is to improve decisions like
+where an E4 was played and eventually help detect slides, hammer-ons, pull-offs, and bends.
+
+V3: Proper editor and richer exports
+Goal: make Riffle feel like a real product rather than only a generator.
+
+034-tab-preview-ui.md
+Adds a better frontend tab preview rather than plain text display. It should render the internal TabDocument in a
+readable way, but still avoid becoming a full editor too early.
+
+035-tab-correction-ui.md
+Allows the user to correct generated string/fret choices. This is important because AI transcription will not be
+perfect. Corrections may later feed improved exports or model evaluation.
+
+036-user-edited-tab-documents.md
+Adds the concept of user-edited TabDocuments. This lets the system preserve the original generated tab and the
+user-corrected version separately.
+
+037-guitar-pro-compatible-export.md
+Investigates or implements Guitar Pro-compatible export. This should come after MusicXML and after the internal
+TabDocument has stabilised.
+
