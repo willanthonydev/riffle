@@ -1,0 +1,462 @@
+openapi: 3.1.0
+info:
+  title: Riffle Audio Analyser API
+  version: 0.1.0
+  description: >
+    Service-to-service contract for the Python audio-analyser service. The
+    service accepts prepared WAV audio from S3-compatible object storage, runs
+    Basic Pitch, and returns normalised audio analysis signals. Spring owns
+    orchestration, job state, media preparation, tab inference, exports, and
+    persistence.
+servers:
+  - url: http://localhost:8001
+    description: Local audio-analyser service
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: Process liveness check. Does not require S3 access or Basic Pitch transcription.
+      responses:
+        "200":
+          description: The service process is running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              examples:
+                healthy:
+                  value:
+                    status: ok
+                    service: audio-analyser
+  /v1/analyse-audio:
+    post:
+      operationId: analyseAudio
+      summary: Analyse prepared audio
+      description: >
+        Synchronously analyses a prepared WAV audio object from S3-compatible
+        object storage and returns normalised note events, minimal MIDI
+        metadata, confidence values, warnings, and analysis metadata. The
+        service does not create jobs, update Spring state, generate tabs, choose
+        guitar string/fret positions, create exports, or persist results.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyseAudioRequest"
+            examples:
+              preparedWav:
+                value:
+                  sessionId: session-1
+                  audioUri: s3://riffle-local/recordings/session-1/prepared-audio.wav
+                  contentType: audio/wav
+                  durationMs: 5320
+      responses:
+        "200":
+          description: Audio analysis completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyseAudioResponse"
+              examples:
+                withNotes:
+                  value:
+                    sessionId: session-1
+                    source:
+                      audioUri: s3://riffle-local/recordings/session-1/prepared-audio.wav
+                      contentType: audio/wav
+                      durationMs: 5320
+                    notes:
+                      - startMs: 120
+                        endMs: 480
+                        durationMs: 360
+                        pitchMidi: 64
+                        pitchName: E4
+                        frequencyHz: 329.63
+                        confidence: 0.91
+                    midi:
+                      available: true
+                      noteCount: 1
+                    confidence:
+                      overall: 0.91
+                    warnings: []
+                    analysis:
+                      modelName: basic-pitch
+                      modelVersion: null
+                      serviceVersion: local-dev
+                      startedAt: "2026-06-05T13:00:00Z"
+                      completedAt: "2026-06-05T13:00:03Z"
+                      processingTimeMs: 3000
+        "400":
+          description: Invalid JSON shape, required field, URI format, or duration value.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidRequest:
+                  value:
+                    error:
+                      code: INVALID_REQUEST
+                      message: Invalid analyse-audio request.
+                      sessionId: session-1
+        "404":
+          description: The prepared audio object was not found in S3-compatible object storage.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                objectNotFound:
+                  value:
+                    error:
+                      code: AUDIO_OBJECT_NOT_FOUND
+                      message: Prepared audio object was not found.
+                      sessionId: session-1
+        "415":
+          description: The prepared audio content type is not supported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unsupportedContentType:
+                  value:
+                    error:
+                      code: UNSUPPORTED_CONTENT_TYPE
+                      message: Unsupported audio content type.
+                      sessionId: session-1
+        "422":
+          description: The prepared audio object exists but could not be decoded as audio.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unreadableAudio:
+                  value:
+                    error:
+                      code: UNREADABLE_AUDIO
+                      message: Prepared audio object could not be decoded.
+                      sessionId: session-1
+        "500":
+          description: >
+            Analysis failed because Basic Pitch transcription failed or object
+            storage returned an unexpected non-missing-object read failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                transcriptionFailed:
+                  value:
+                    error:
+                      code: TRANSCRIPTION_FAILED
+                      message: Audio transcription failed.
+                      sessionId: session-1
+                storageReadFailed:
+                  value:
+                    error:
+                      code: STORAGE_READ_FAILED
+                      message: Prepared audio could not be read from object storage.
+                      sessionId: session-1
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - service
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+          description: Process health status.
+        service:
+          type: string
+          enum:
+            - audio-analyser
+          description: Service name.
+
+    AnalyseAudioRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - sessionId
+        - audioUri
+        - contentType
+        - durationMs
+      properties:
+        sessionId:
+          type: string
+          minLength: 1
+          description: >
+            Opaque non-blank trace/correlation identifier supplied by Spring.
+            This value is for traceability only and is not authoritative job
+            state. UUID format is not required.
+          examples:
+            - session-1
+        audioUri:
+          type: string
+          pattern: "^s3://[^/]+/.+"
+          description: >
+            Concrete URI for a prepared audio object in S3-compatible object
+            storage. The URI must use the s3:// scheme and include a bucket and
+            object key. Combined audio/video media is not accepted.
+          examples:
+            - s3://riffle-local/recordings/session-1/prepared-audio.wav
+        contentType:
+          $ref: "#/components/schemas/PreparedAudioContentType"
+        durationMs:
+          type: integer
+          minimum: 1
+          maximum: 15000
+          description: Duration of the prepared audio in milliseconds.
+          examples:
+            - 5320
+
+    PreparedAudioContentType:
+      type: string
+      description: >
+        Prepared WAV audio content type. Spring/FFmpeg controls prepared audio
+        format for this slice.
+      enum:
+        - audio/wav
+        - audio/x-wav
+
+    AnalyseAudioResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - sessionId
+        - source
+        - notes
+        - midi
+        - confidence
+        - warnings
+        - analysis
+      properties:
+        sessionId:
+          type: string
+          description: Echoed trace/correlation identifier from the request.
+        source:
+          $ref: "#/components/schemas/AudioSource"
+        notes:
+          type: array
+          description: >
+            Ordered normalised note events derived from Basic Pitch output.
+            Empty only when transcription succeeds but no notes are detected.
+            Notes are sorted by startMs, then pitchMidi.
+          items:
+            $ref: "#/components/schemas/NoteEvent"
+        midi:
+          $ref: "#/components/schemas/MidiMetadata"
+        confidence:
+          $ref: "#/components/schemas/ConfidenceSummary"
+        warnings:
+          type: array
+          description: Non-fatal warnings. Empty when analysis completed without warnings.
+          items:
+            $ref: "#/components/schemas/AnalysisWarning"
+        analysis:
+          $ref: "#/components/schemas/AnalysisMetadata"
+
+    AudioSource:
+      type: object
+      additionalProperties: false
+      required:
+        - audioUri
+        - contentType
+        - durationMs
+      properties:
+        audioUri:
+          type: string
+          pattern: "^s3://[^/]+/.+"
+          description: Echoed prepared audio URI from the request.
+        contentType:
+          $ref: "#/components/schemas/PreparedAudioContentType"
+        durationMs:
+          type: integer
+          minimum: 1
+          maximum: 15000
+          description: Echoed prepared audio duration in milliseconds.
+
+    NoteEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - startMs
+        - endMs
+        - durationMs
+        - pitchMidi
+        - pitchName
+        - frequencyHz
+        - confidence
+      properties:
+        startMs:
+          type: integer
+          minimum: 0
+          description: Note onset time in milliseconds from the start of prepared audio.
+        endMs:
+          type: integer
+          minimum: 0
+          description: Note end time in milliseconds from the start of prepared audio.
+        durationMs:
+          type: integer
+          minimum: 0
+          description: Note duration in milliseconds.
+        pitchMidi:
+          type: integer
+          minimum: 0
+          maximum: 127
+          description: MIDI note number.
+        pitchName:
+          type: string
+          description: Human-readable pitch name, such as E4.
+          examples:
+            - E4
+        frequencyHz:
+          type: number
+          format: double
+          minimum: 0
+          description: Frequency derived from the MIDI pitch.
+          examples:
+            - 329.63
+        confidence:
+          type:
+            - number
+            - "null"
+          format: double
+          minimum: 0
+          maximum: 1
+          description: Per-note confidence when available, otherwise null.
+
+    MidiMetadata:
+      type: object
+      additionalProperties: false
+      required:
+        - available
+        - noteCount
+      properties:
+        available:
+          type: boolean
+          description: Whether MIDI-derived metadata was available from analysis.
+        noteCount:
+          type: integer
+          minimum: 0
+          description: Number of normalised note events returned.
+      description: >
+        Minimal MIDI-derived metadata only. This API does not return, store, or
+        base64-encode an actual MIDI file.
+
+    ConfidenceSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - overall
+      properties:
+        overall:
+          type:
+            - number
+            - "null"
+          format: double
+          minimum: 0
+          maximum: 1
+          description: Overall transcription confidence when available, otherwise null.
+
+    AnalysisWarning:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Stable warning code.
+          examples:
+            - NO_NOTES_DETECTED
+            - LOW_OVERALL_CONFIDENCE
+            - AUDIO_DURATION_NEAR_LIMIT
+            - MIDI_METADATA_UNAVAILABLE
+        message:
+          type: string
+          description: Safe human-readable warning message.
+
+    AnalysisMetadata:
+      type: object
+      additionalProperties: false
+      required:
+        - modelName
+        - modelVersion
+        - serviceVersion
+        - startedAt
+        - completedAt
+        - processingTimeMs
+      properties:
+        modelName:
+          type: string
+          description: Name of the transcription model.
+          examples:
+            - basic-pitch
+        modelVersion:
+          type:
+            - string
+            - "null"
+          description: Basic Pitch model or package version when known, otherwise null.
+        serviceVersion:
+          type: string
+          description: Audio-analyser service version.
+          examples:
+            - local-dev
+        startedAt:
+          type: string
+          format: date-time
+          description: Analysis start timestamp.
+        completedAt:
+          type: string
+          format: date-time
+          description: Analysis completion timestamp.
+        processingTimeMs:
+          type: integer
+          minimum: 0
+          description: Analysis processing time in milliseconds.
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+
+    ErrorBody:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+          enum:
+            - INVALID_REQUEST
+            - UNSUPPORTED_CONTENT_TYPE
+            - AUDIO_OBJECT_NOT_FOUND
+            - UNREADABLE_AUDIO
+            - TRANSCRIPTION_FAILED
+            - STORAGE_READ_FAILED
+        message:
+          type: string
+          description: >
+            Safe human-readable summary. Must not include credentials, signed
+            URLs, local temporary file paths, Python stack traces, or full
+            dependency exception dumps.
+        sessionId:
+          type: string
+          description: Echoed when present and safely parseable from the request.
